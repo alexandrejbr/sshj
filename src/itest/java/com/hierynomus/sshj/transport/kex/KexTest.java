@@ -36,6 +36,7 @@ import net.schmizz.sshj.transport.kex.DHGexSHA1;
 import net.schmizz.sshj.transport.kex.DHGexSHA256;
 import net.schmizz.sshj.transport.kex.ECDHNistP;
 import net.schmizz.sshj.transport.kex.KeyExchange;
+import net.schmizz.sshj.transport.kex.MLKEM768X25519SHA256;
 
 @Testcontainers
 public class KexTest {
@@ -55,7 +56,8 @@ public class KexTest {
                 new Curve25519SHA256.FactoryLibSsh(),
                 new ECDHNistP.Factory256(),
                 new ECDHNistP.Factory384(),
-                new ECDHNistP.Factory521());
+                new ECDHNistP.Factory521(),
+                new MLKEM768X25519SHA256.Factory());
     }
 
     @ParameterizedTest(name = "should correctly connect with Key Exchange {0}")

@@ -170,6 +170,15 @@ task writeSshjVersionProperties {
 }
 
 jar.dependsOn writeSshjVersionProperties
+
+task mlkemHybridConnect(type: JavaExec) {
+  description = "Connects to an SSH server using only mlkem768x25519-sha256 to prove the hybrid KEX works."
+  group = "verification"
+  classpath = sourceSets.test.runtimeClasspath
+  mainClass = "com.hierynomus.sshj.transport.kex.MLKEMHybridKexConnectMain"
+  systemProperties = System.properties.findAll { k, v -> k.toString().startsWith("sshj.") }
+  standardInput = System.in
+}
 jar {
   inputs.property("moduleName", moduleName)
   manifest {

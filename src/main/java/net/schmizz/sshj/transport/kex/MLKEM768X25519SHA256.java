@@ -25,12 +25,6 @@ import net.schmizz.sshj.signature.Signature;
 import net.schmizz.sshj.transport.Transport;
 import net.schmizz.sshj.transport.TransportException;
 import net.schmizz.sshj.transport.digest.SHA256;
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
-import org.bouncycastle.crypto.agreement.X25519Agreement;
-import org.bouncycastle.crypto.generators.X25519KeyPairGenerator;
-import org.bouncycastle.crypto.params.X25519KeyGenerationParameters;
-import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
-import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,9 +77,7 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
     private final Logger log = LoggerFactory.getLogger(getClass());
 
     private final MLKEM768 mlkem = new MLKEM768();
-
-    private X25519PrivateKeyParameters x25519Private;
-    private X25519PublicKeyParameters x25519Public;
+    private final Curve25519DH x25519 = new Curve25519DH();
 
     private byte[] cInit;
 
@@ -101,23 +93,17 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
         super.init(trans, V_S, V_C, I_S, I_C);
         digest.init();
 
-        final SecureRandom random = new SecureRandom();
-
         // Generate X25519 ephemeral key pair (C_PK1).
-        final X25519KeyPairGenerator x25519Generator = new X25519KeyPairGenerator();
-        x25519Generator.init(new X25519KeyGenerationParameters(random));
-        final AsymmetricCipherKeyPair x25519KeyPair = x25519Generator.generateKeyPair();
-        x25519Private = (X25519PrivateKeyParameters) x25519KeyPair.getPrivate();
-        x25519Public = (X25519PublicKeyParameters) x25519KeyPair.getPublic();
+        x25519.init(null, trans.getConfig().getRandomFactory());
 
         // Generate ML-KEM-768 ephemeral key pair (C_PK2).
-        final byte[] mlkemPublicKey = mlkem.generateKeyPair(random);
+        final byte[] mlkemPublicKey = mlkem.generateKeyPair(new SecureRandom());
 
         // C_INIT is the concatenation C_PK2 || C_PK1.
-        cInit = new byte[MLKEM768.PUBLIC_KEY_LENGTH + X25519PublicKeyParameters.KEY_SIZE];
+        final byte[] x25519PublicKey = x25519.getE();
+        cInit = new byte[MLKEM768.PUBLIC_KEY_LENGTH + Curve25519DH.KEY_LENGTH];
         System.arraycopy(mlkemPublicKey, 0, cInit, 0, MLKEM768.PUBLIC_KEY_LENGTH);
-        System.arraycopy(x25519Public.getEncoded(), 0, cInit, MLKEM768.PUBLIC_KEY_LENGTH,
-                X25519PublicKeyParameters.KEY_SIZE);
+        System.arraycopy(x25519PublicKey, 0, cInit, MLKEM768.PUBLIC_KEY_LENGTH, Curve25519DH.KEY_LENGTH);
 
         log.debug("Sending SSH_MSG_KEX_HYBRID_INIT");
         trans.write(new SSHPacket(Message.KEXDH_INIT).putBytes(cInit));
@@ -145,25 +131,22 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
         }
 
         // S_REPLY = S_CT2 || S_PK1
-        final int expectedLength = MLKEM768.CIPHERTEXT_LENGTH + X25519PublicKeyParameters.KEY_SIZE;
+        final int expectedLength = MLKEM768.CIPHERTEXT_LENGTH + Curve25519DH.KEY_LENGTH;
         if (sReply.length != expectedLength) {
             throw new TransportException(DisconnectReason.KEY_EXCHANGE_FAILED,
                     "S_REPLY length must be " + expectedLength + " bytes but was " + sReply.length);
         }
         final byte[] sCt2 = new byte[MLKEM768.CIPHERTEXT_LENGTH];
-        final byte[] sPk1 = new byte[X25519PublicKeyParameters.KEY_SIZE];
+        final byte[] sPk1 = new byte[Curve25519DH.KEY_LENGTH];
         System.arraycopy(sReply, 0, sCt2, 0, MLKEM768.CIPHERTEXT_LENGTH);
-        System.arraycopy(sReply, MLKEM768.CIPHERTEXT_LENGTH, sPk1, 0, X25519PublicKeyParameters.KEY_SIZE);
+        System.arraycopy(sReply, MLKEM768.CIPHERTEXT_LENGTH, sPk1, 0, Curve25519DH.KEY_LENGTH);
 
         // K_PQ: decapsulate ML-KEM-768 ciphertext.
         final byte[] kPq = mlkem.decapsulate(sCt2);
 
-        // K_CL: X25519 shared secret.
-        final X25519Agreement agreement = new X25519Agreement();
-        agreement.init(x25519Private);
-        final X25519PublicKeyParameters peerX25519 = new X25519PublicKeyParameters(sPk1, 0);
-        final byte[] kCl = new byte[agreement.getAgreementSize()];
-        agreement.calculateAgreement(peerX25519, kCl, 0);
+        // K_CL: X25519 shared secret in raw byte form (NOT mpint), as required by the draft.
+        x25519.computeK(sPk1);
+        final byte[] kCl = x25519.getSharedSecretBytes();
 
         // Per RFC 8731, an all-zero output indicates a low-order point and MUST be rejected.
         if (isAllZero(kCl)) {

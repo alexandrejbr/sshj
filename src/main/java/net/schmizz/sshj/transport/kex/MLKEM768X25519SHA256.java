@@ -18,7 +18,6 @@ package net.schmizz.sshj.transport.kex;
 import com.hierynomus.sshj.userauth.certificate.Certificate;
 import net.schmizz.sshj.common.Buffer;
 import net.schmizz.sshj.common.DisconnectReason;
-import net.schmizz.sshj.common.KeyType;
 import net.schmizz.sshj.common.Message;
 import net.schmizz.sshj.common.SSHPacket;
 import net.schmizz.sshj.signature.Signature;
@@ -183,7 +182,7 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
                     "KeyExchange signature verification failed");
         }
 
-        verifyCertificate(K_S);
+        KexHostKeyCertificateVerifier.verify(trans, hostKey, K_S);
 
         return true;
     }
@@ -220,36 +219,5 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
             acc |= b & 0xff;
         }
         return acc == 0;
-    }
-
-    private void verifyCertificate(final byte[] K_S) throws TransportException {
-        if (hostKey instanceof Certificate<?> && trans.getConfig().isVerifyHostKeyCertificates()) {
-            final Certificate<?> cert = (Certificate<?>) this.hostKey;
-            String signatureType;
-            String caKeyType;
-            try {
-                signatureType = new Buffer.PlainBuffer(cert.getSignature()).readString();
-            } catch (Buffer.BufferException e) {
-                signatureType = null;
-            }
-            try {
-                caKeyType = new Buffer.PlainBuffer(cert.getSignatureKey()).readString();
-            } catch (Buffer.BufferException e) {
-                caKeyType = null;
-            }
-            log.debug("Verifying signature of the key with type {} (signature type {}, CA key type {})",
-                    cert.getType(), signatureType, caKeyType);
-
-            try {
-                final String certError = KeyType.CertUtils.verifyHostCertificate(K_S, cert, trans.getRemoteHost());
-                if (certError != null) {
-                    throw new TransportException(DisconnectReason.KEY_EXCHANGE_FAILED,
-                            "KeyExchange certificate check failed: " + certError);
-                }
-            } catch (final Buffer.BufferException e) {
-                throw new TransportException(DisconnectReason.KEY_EXCHANGE_FAILED,
-                        "KeyExchange certificate check failed: " + e.getMessage());
-            }
-        }
     }
 }

@@ -201,17 +201,18 @@ public class MLKEM768X25519SHA256 extends KeyExchangeBase {
     }
 
     /**
-     * Returns the shared secret K interpreted as a non-negative {@link BigInteger}.
-     * <p>
-     * Note: for this hybrid key exchange K is a fixed-length byte string and is NOT
-     * encoded as an {@code mpint} on the wire. This getter is provided only to
-     * satisfy the {@link KeyExchange} contract; the on-wire encoding is governed by
-     * {@link #putSharedSecret(Buffer.PlainBuffer)}.
-     * </p>
+     * Unsupported for the hybrid PQ key exchange. K is a fixed-length byte string
+     * (the SHA-256 of {@code K_PQ || K_CL}) and is encoded on the wire as an SSH
+     * {@code string}, not as an {@code mpint}. Callers that legitimately need the
+     * shared secret bytes for inclusion in the exchange hash or key derivation
+     * MUST use {@link #putSharedSecret(Buffer.PlainBuffer)}.
+     *
+     * @throws UnsupportedOperationException always
      */
     @Override
     public BigInteger getK() {
-        return new BigInteger(1, kEncoded);
+        throw new UnsupportedOperationException(
+                "K is a fixed-length string for hybrid KEX; use putSharedSecret(...)");
     }
 
     private static boolean isAllZero(final byte[] data) {

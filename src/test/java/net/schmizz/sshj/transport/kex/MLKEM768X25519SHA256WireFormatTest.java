@@ -38,6 +38,7 @@ import java.security.SecureRandom;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -154,6 +155,22 @@ public class MLKEM768X25519SHA256WireFormatTest {
     }
 
     /**
+     * For every other KEX in sshj K is a number and callers reasonably assume
+     * {@code new Buffer.PlainBuffer().putMPInt(kex.getK())} reproduces the exact bytes
+     * that went into the exchange hash H. For the hybrid PQ KEX that assumption is wrong:
+     * K is a fixed-length string and is encoded via {@link KeyExchange#putSharedSecret}.
+     * To prevent silent misuse, {@link MLKEM768X25519SHA256#getK()} must fail loudly.
+     */
+    @Test
+    public void getKThrowsUnsupportedOperation() throws Exception {
+        final ServerExchange exchange = runFullExchange();
+        final UnsupportedOperationException ex = assertThrows(UnsupportedOperationException.class,
+                () -> exchange.kex.getK());
+        assertTrue(ex.getMessage() != null && ex.getMessage().contains("putSharedSecret"),
+                "error message should steer callers toward putSharedSecret(...) but was: " + ex.getMessage());
+    }
+
+    /**
      * Drives {@link MLKEM768X25519SHA256#init} with mocked transport collaborators and
      * returns the {@link SSHPacket} the implementation wrote to the wire.
      */
@@ -232,25 +249,18 @@ public class MLKEM768X25519SHA256WireFormatTest {
         reply.readMessageID(); // advance past the message id, as the dispatcher would
         kex.next(Message.KEXDH_31, reply);
 
-        // K is exposed via getK(); strip the BigInteger sign and reconstruct the 32 bytes.
-        final byte[] kEncoded = toFixedLengthUnsigned(kex.getK(), 32);
+        // K is not retrievable as a BigInteger for the hybrid KEX (getK() throws);
+        // extract the on-wire bytes via putSharedSecret(...), then strip the SSH string length prefix.
+        final Buffer.PlainBuffer sharedSecretBuffer = new Buffer.PlainBuffer();
+        kex.putSharedSecret(sharedSecretBuffer);
+        final byte[] kEncoded;
+        try {
+            kEncoded = sharedSecretBuffer.readBytes();
+        } catch (final Buffer.BufferException e) {
+            throw new AssertionError("Failed to read K written by putSharedSecret", e);
+        }
 
         return new ServerExchange(kex, kPq, kCl, kEncoded);
-    }
-
-    private static byte[] toFixedLengthUnsigned(final BigInteger value, final int length) {
-        final byte[] raw = value.toByteArray();
-        final byte[] out = new byte[length];
-        if (raw.length == length) {
-            return raw;
-        }
-        if (raw.length == length + 1 && raw[0] == 0) {
-            System.arraycopy(raw, 1, out, 0, length);
-            return out;
-        }
-        // Left-pad with zeros (high bytes happened to be zero).
-        System.arraycopy(raw, 0, out, length - raw.length, raw.length);
-        return out;
     }
 
     private static final class ServerExchange {

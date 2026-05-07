@@ -29,9 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 public class MLKEM768Test {
 
     @Test
-    public void generateKeyPairProducesCorrectlySizedPublicKey() throws GeneralSecurityException {
+    public void generateKeyPairProducesCorrectlySizedPublicKey() {
         final MLKEM768 mlkem = new MLKEM768();
-        final byte[] publicKey = mlkem.generateKeyPair();
+        final byte[] publicKey = mlkem.generateKeyPair(new SecureRandom());
 
         assertNotNull(publicKey);
         assertEquals(MLKEM768.PUBLIC_KEY_LENGTH, publicKey.length);
@@ -42,7 +42,7 @@ public class MLKEM768Test {
         final SecureRandom random = new SecureRandom();
         final MLKEM768 mlkem = new MLKEM768();
 
-        final byte[] publicKey = mlkem.generateKeyPair();
+        final byte[] publicKey = mlkem.generateKeyPair(random);
         final SecretWithEncapsulation server = MLKEM768.encapsulate(publicKey, random);
 
         assertEquals(MLKEM768.CIPHERTEXT_LENGTH, server.getEncapsulation().length);
@@ -55,9 +55,9 @@ public class MLKEM768Test {
     }
 
     @Test
-    public void decapsulateRejectsCiphertextOfWrongLength() throws GeneralSecurityException {
+    public void decapsulateRejectsCiphertextOfWrongLength() {
         final MLKEM768 mlkem = new MLKEM768();
-        mlkem.generateKeyPair();
+        mlkem.generateKeyPair(new SecureRandom());
 
         assertThrows(GeneralSecurityException.class, () -> mlkem.decapsulate(new byte[10]));
     }

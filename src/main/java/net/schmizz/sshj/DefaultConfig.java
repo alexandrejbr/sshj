@@ -35,6 +35,8 @@ import net.schmizz.sshj.transport.kex.Curve25519SHA256;
 import net.schmizz.sshj.transport.kex.DHGexSHA1;
 import net.schmizz.sshj.transport.kex.DHGexSHA256;
 import net.schmizz.sshj.transport.kex.ECDHNistP;
+import net.schmizz.sshj.transport.kex.KeyExchange;
+import net.schmizz.sshj.transport.kex.MLKEM768X25519SHA256;
 import net.schmizz.sshj.transport.random.JCERandom;
 import net.schmizz.sshj.transport.random.SingletonRandomFactory;
 import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile;
@@ -43,9 +45,11 @@ import net.schmizz.sshj.userauth.keyprovider.PuTTYKeyFile;
 import org.slf4j.Logger;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedList;
 import java.util.ListIterator;
+import java.util.Optional;
 import java.util.Properties;
 
 /**
@@ -104,7 +108,11 @@ public class DefaultConfig
     }
 
     protected void initKeyExchangeFactories() {
-        setKeyExchangeFactories(
+        final List<Factory.Named<KeyExchange>> factories = new ArrayList<>();
+        if (MLKEM768X25519SHA256.isSupported()) {
+            factories.add(new MLKEM768X25519SHA256.Factory());
+        }
+        factories.addAll(Arrays.<Factory.Named<KeyExchange>>asList(
                 new Curve25519SHA256.Factory(),
                 new Curve25519SHA256.FactoryLibSsh(),
                 new DHGexSHA256.Factory(),
@@ -128,13 +136,16 @@ public class DefaultConfig
                 ExtendedDHGroups.Group16SHA512AtSSH(),
                 ExtendedDHGroups.Group18SHA512AtSSH(),
                 new ExtInfoClientFactory()
-        );
+        ));
+        setKeyExchangeFactories(factories);
     }
 
     protected void initKeyAlgorithms() {
         setKeyAlgorithms(Arrays.<Factory.Named<KeyAlgorithm>>asList(
                 KeyAlgorithms.EdDSA25519CertV01(),
                 KeyAlgorithms.EdDSA25519(),
+                KeyAlgorithms.SkSSHEd25519(),
+                KeyAlgorithms.SkECDSANistp256(),
                 KeyAlgorithms.ECDSASHANistp521CertV01(),
                 KeyAlgorithms.ECDSASHANistp521(),
                 KeyAlgorithms.ECDSASHANistp384CertV01(),
@@ -162,8 +173,8 @@ public class DefaultConfig
         );
     }
 
-    protected void initCipherFactories() {
-        List<Factory.Named<Cipher>> avail = new LinkedList<Factory.Named<Cipher>>(Arrays.<Factory.Named<Cipher>>asList(
+    protected List<Factory.Named<Cipher>> getDefaultCipherFactories() {
+        return new LinkedList<>(Arrays.<Factory.Named<Cipher>>asList(
                 ChachaPolyCiphers.CHACHA_POLY_OPENSSH(),
                 BlockCiphers.AES128CBC(),
                 BlockCiphers.AES128CTR(),
@@ -198,6 +209,10 @@ public class DefaultConfig
                 StreamCiphers.Arcfour128(),
                 StreamCiphers.Arcfour256())
         );
+    }
+
+    protected void initCipherFactories() {
+        List<Factory.Named<Cipher>> avail = getDefaultCipherFactories();
 
         final ListIterator<Factory.Named<Cipher>> factories = avail.listIterator();
         while (factories.hasNext()) {
@@ -208,7 +223,7 @@ public class DefaultConfig
                 final byte[] iv = new byte[cipher.getIVSize()];
                 cipher.init(Cipher.Mode.Encrypt, key, iv);
             } catch (Exception e) {
-                log.info("Cipher [{}] disabled: {}", factory.getName(), e.getCause().getMessage());
+                log.info("Cipher [{}] disabled: {}", factory.getName(), Optional.ofNullable(e.getCause()).map(Throwable::getMessage), e);
                 factories.remove();
             }
         }

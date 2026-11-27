@@ -19,6 +19,7 @@ import com.hierynomus.sshj.key.KeyAlgorithm;
 import net.schmizz.sshj.common.Buffer;
 import net.schmizz.sshj.common.KeyType;
 import net.schmizz.sshj.common.SSHPacket;
+import net.schmizz.sshj.common.SSHRuntimeException;
 import net.schmizz.sshj.signature.Signature;
 import net.schmizz.sshj.transport.TransportException;
 import net.schmizz.sshj.userauth.UserAuthException;
@@ -26,8 +27,11 @@ import net.schmizz.sshj.userauth.keyprovider.KeyProvider;
 
 import java.io.IOException;
 import java.security.PrivateKey;
+import java.security.ProviderException;
 import java.security.PublicKey;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 
 public abstract class KeyedAuthMethod
@@ -41,11 +45,37 @@ public abstract class KeyedAuthMethod
         this.kProv = kProv;
     }
 
-    private KeyAlgorithm getPublicKeyAlgorithm(KeyType keyType) throws TransportException {
+    protected KeyAlgorithm getPublicKeyAlgorithm(KeyType keyType) throws TransportException {
         if (available == null) {
-            available = new LinkedList<>(params.getTransport().getClientKeyAlgorithms(keyType));
+            List<KeyAlgorithm> clientAlgorithms = new ArrayList<>(params.getTransport().getClientKeyAlgorithms(keyType));
+            List<String> serverSigAlgs = params.getTransport().getServerSignatureAlgorithms();
+            if (!serverSigAlgs.isEmpty()) {
+                clientAlgorithms = reorderByServerPreference(clientAlgorithms, serverSigAlgs);
+            }
+            available = new LinkedList<>(clientAlgorithms);
         }
         return available.peek();
+    }
+
+    /**
+     * Move the {@link KeyAlgorithm}s the server advertised via {@code server-sig-algs} (RFC
+     * 8308) to the front, so the first publickey auth attempt is more likely to match what the
+     * server accepts - without ever dropping a client-configured candidate, since the server's
+     * list may be incomplete or reference algorithms this client doesn't recognize.
+     */
+    private static List<KeyAlgorithm> reorderByServerPreference(
+            List<KeyAlgorithm> clientAlgorithms, List<String> serverSigAlgs) {
+        List<KeyAlgorithm> preferred = new ArrayList<>();
+        List<KeyAlgorithm> fallback = new ArrayList<>();
+        for (KeyAlgorithm ka : clientAlgorithms) {
+            (serverSigAlgs.contains(ka.getKeyAlgorithm()) ? preferred : fallback).add(ka);
+        }
+        if (preferred.isEmpty()) {
+            return clientAlgorithms; // no overlap: leave the original order untouched
+        }
+        List<KeyAlgorithm> reordered = new ArrayList<>(preferred);
+        reordered.addAll(fallback);
+        return reordered;
     }
 
     @Override
@@ -98,12 +128,27 @@ public abstract class KeyedAuthMethod
             throw new UserAuthException("No KeyAlgorithm configured for key " + kt);
         }
 
-        signature.initSign(key);
-        signature.update(new Buffer.PlainBuffer()
-                .putString(params.getTransport().getSessionID())
-                .putBuffer(reqBuf) // & rest of the data for sig
-                .getCompactData());
-        reqBuf.putSignature(signature.getSignatureName(), signature.encode(signature.sign()));
+        final byte[] encoded;
+        try {
+            signature.initSign(key);
+            signature.update(new Buffer.PlainBuffer()
+                    .putString(params.getTransport().getSessionID())
+                    .putBuffer(reqBuf) // & rest of the data for sig
+                    .getCompactData());
+            encoded = signature.encode(signature.sign());
+        } catch (SSHRuntimeException | ProviderException e) {
+            // The key could not sign, e.g. the user cancelled a touch/PIN prompt, or a PKCS#11 token was removed
+            // (the JDK reports that as an unchecked ProviderException). That only fails this attempt: a runtime
+            // exception escaping here would reach the transport reader thread and close the whole connection,
+            // leaving the caller unable to try another authentication method.
+            throw new UserAuthException("Problem signing with " + kProv, e.getCause() != null ? e.getCause() : e);
+        }
+        if (signature.isSignaturePreEncoded()) {
+            // A FIDO/U2F signature already encodes the type, flags and counter; write it as one string.
+            reqBuf.putString(encoded);
+        } else {
+            reqBuf.putSignature(signature.getSignatureName(), encoded);
+        }
         return reqBuf;
     }
 
